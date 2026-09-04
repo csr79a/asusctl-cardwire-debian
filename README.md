@@ -10,9 +10,14 @@ misma función (conmutación/gestión de GPU híbrida).
 ## Qué instala
 
 - **asusctl** y **rog-control-center**: compilados desde el repo oficial
-  (`gitlab.com/asus-linux/asusctl`), vía Rust/rustup.
-- **Cardwire**: paquete `.deb` oficial más reciente, descargado automáticamente
-  desde las releases de GitHub (`OpenGamingCollective/cardwire`).
+  (`gitlab.com/asus-linux/asusctl`), vía Rust/rustup, empaquetados con
+  `checkinstall` para que queden registrados en dpkg (y se puedan
+  desinstalar limpiamente).
+- **Cardwire**: paquete `.deb` oficial más reciente, descargado
+  automáticamente desde las releases de GitHub
+  (`OpenGamingCollective/cardwire`) siguiendo la redirección pública de
+  `/releases/latest` (sin pasar por `api.github.com`, para no toparse con
+  su límite de 60 peticiones/hora sin autenticar).
 
 ## Requisitos
 
@@ -32,7 +37,23 @@ chmod +x setup-asusctl-cardwire-debian.sh
 El script se detiene en el primer error y pide confirmación antes de pasos
 sensibles (como enmascarar `power-profiles-daemon`). Revisa el contenido
 antes de ejecutarlo, especialmente si vas a lanzarlo en un equipo que no sea
-de pruebas.
+de pruebas. Guarda un registro de lo que cambió en
+`~/.local/state/asusctl-cardwire-debian/install.env`, que usa el script de
+desinstalación para revertir solo lo que él mismo tocó.
+
+## Desinstalar / revertir
+
+```bash
+chmod +x uninstall-asusctl-cardwire-debian.sh
+./uninstall-asusctl-cardwire-debian.sh
+```
+
+Quita Cardwire y asusctl/rog-control-center (ambos vía `apt purge`, ya que
+quedan registrados en dpkg), y revierte los cambios de sistema conocidos
+(desenmascarar `power-profiles-daemon` si el instalador lo enmascaró,
+opción de quitar rustup si lo instaló el propio script). Las dependencias
+de compilación instaladas por apt no se tocan, por ser librerías que puede
+compartir otro software.
 
 Ver [MANUAL.md](MANUAL.md) para el detalle de cada paso, permisos necesarios
 y cómo revertir la instalación.

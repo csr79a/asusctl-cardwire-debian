@@ -2,11 +2,16 @@
 #
 # setup-asusctl-cardwire-debian.sh
 #
-# Instala asusctl + rog-control-center (compilados desde código fuente) y
-# Cardwire (gestor de GPU vía eBPF LSM, sustituto de supergfxctl) en Debian
-# y derivados (Debian 13/trixie o posterior, KDE Plasma, sesión Wayland).
+# Instala asusctl + rog-control-center (compilados desde código fuente, vía
+# checkinstall) y Cardwire (gestor de GPU vía eBPF LSM, sustituto de
+# supergfxctl) en Debian y derivados (Debian 13/trixie o posterior, KDE
+# Plasma, sesión Wayland).
 #
 # NO instala supergfxctl: ese proyecto está en desuso, Cardwire lo sustituye.
+#
+# Todo lo instalado queda registrado en dpkg (checkinstall para asusctl,
+# .deb oficial para Cardwire), así que se puede revertir limpiamente con
+# uninstall-asusctl-cardwire-debian.sh.
 #
 # Uso:
 #   chmod +x setup-asusctl-cardwire-debian.sh
@@ -19,6 +24,8 @@ set -euo pipefail
 
 ASUSCTL_VERSION="6.3.8"   # ajusta si quieres otra versión/tag concreto
 BUILD_DIR="$HOME/Proyectos/asusctl-cardwire-build"
+STATE_DIR="$HOME/.local/state/asusctl-cardwire-debian"
+STATE_FILE="$STATE_DIR/install.env"
 
 log()  { echo -e "\n\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m[AVISO]\033[0m $*"; }
@@ -31,6 +38,10 @@ confirm() {
         *) return 1 ;;
     esac
 }
+
+mkdir -p "$STATE_DIR"
+: > "$STATE_FILE"   # el estado se reescribe en cada ejecución
+state_set() { echo "$1=$2" >> "$STATE_FILE"; }
 
 # ---------------------------------------------------------------------------
 # 0. Comprobaciones previas (bloqueantes)
@@ -80,6 +91,11 @@ cd "$BUILD_DIR"
 #   - corregido "libexpat-dev" (no existe) -> libexpat1-dev
 #   - añadido libdrm-dev (confirmado como dependencia real de asusctl)
 #   - añadidas las dependencias propias de Cardwire (eBPF/Vulkan/Wayland)
+#
+# Estas dependencias NO se desinstalan automáticamente en el revertido:
+# son librerías del sistema que pueden compartirse con otro software, así
+# que quitarlas a ciegas es más arriesgado que dejarlas. El script de
+# desinstalación deja la lista impresa por si quieres limpiarlas a mano.
 
 log "Instalando dependencias de compilación (asusctl + Cardwire)"
 
@@ -114,21 +130,34 @@ sudo apt install -y \
 
 log "Preparando Rust (rustup)"
 
+CARGO_RUSTC_REMOVED="no"
 if dpkg -l | grep -qE '^ii\s+(cargo|rustc)\s'; then
     warn "Se detectó cargo/rustc instalados vía apt. Se van a quitar para evitar conflictos con rustup."
     sudo apt remove -y cargo rustc || true
+    CARGO_RUSTC_REMOVED="si"
 fi
+state_set CARGO_RUSTC_REMOVED "$CARGO_RUSTC_REMOVED"
 
+RUSTUP_INSTALLED_BY_SCRIPT="no"
 if ! command -v rustup >/dev/null 2>&1; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    RUSTUP_INSTALLED_BY_SCRIPT="si"
 fi
+state_set RUSTUP_INSTALLED_BY_SCRIPT "$RUSTUP_INSTALLED_BY_SCRIPT"
+
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
 rustup default stable
 
 # ---------------------------------------------------------------------------
-# 3. Compilar e instalar asusctl
+# 3. Compilar e instalar asusctl (vía checkinstall -> paquete dpkg real)
 # ---------------------------------------------------------------------------
+#
+# En vez de "sudo make install" a pelo (que no queda registrado en dpkg y
+# depende de que el Makefile tenga un target "uninstall" fiable),
+# checkinstall envuelve la instalación, la registra como paquete .deb y la
+# instala vía dpkg. Así "sudo apt purge asusctl" desinstala todo de forma
+# limpia, igual que Cardwire.
 
 log "Clonando y compilando asusctl v$ASUSCTL_VERSION"
 
@@ -147,28 +176,48 @@ if [ -f data/99-asusd.rules ] && grep -q 'GROUP="wheel"' data/99-asusd.rules; th
 fi
 
 make
-sudo make install
+
+log "Empaquetando asusctl con checkinstall (para que quede registrado en dpkg)"
+sudo checkinstall \
+    --pkgname=asusctl \
+    --pkgversion="$ASUSCTL_VERSION" \
+    --provides=asusctl \
+    --nodoc \
+    -y \
+    make install
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now asusd
 
 cd "$BUILD_DIR"
 
 # ---------------------------------------------------------------------------
-# 4. Instalar Cardwire (paquete .deb oficial)
+# 4. Instalar Cardwire (paquete .deb oficial, sin pasar por api.github.com)
 # ---------------------------------------------------------------------------
+#
+# api.github.com limita a 60 peticiones/hora sin autenticar, y en VMs/IPs
+# compartidas ese cupo puede estar ya agotado por tráfico ajeno. En vez de
+# consultar esa API, seguimos la redirección HTTP pública de
+# /releases/latest (la misma que usa el navegador), que no pasa por la API
+# JSON y por tanto no choca con ese límite.
 
 log "Instalando Cardwire desde el .deb oficial"
 
-CARDWIRE_DEB_URL=$(curl -s https://api.github.com/repos/OpenGamingCollective/cardwire/releases/latest \
-    | grep "browser_download_url.*\.deb" \
-    | cut -d '"' -f 4 \
-    | head -n1)
+CARDWIRE_TAG=$(curl -sI https://github.com/OpenGamingCollective/cardwire/releases/latest \
+    | grep -i '^location:' \
+    | sed 's#.*/tag/##' \
+    | tr -d '\r\n')
 
-if [ -z "$CARDWIRE_DEB_URL" ]; then
-    die "No se pudo obtener la URL del último .deb de Cardwire desde GitHub. Descárgalo manualmente desde https://github.com/OpenGamingCollective/cardwire/releases"
+if [ -z "$CARDWIRE_TAG" ]; then
+    die "No se pudo determinar la última versión de Cardwire (falló la redirección de /releases/latest). Descarga el .deb manualmente desde https://github.com/OpenGamingCollective/cardwire/releases e instálalo con: sudo apt install ./cardwire_*.deb"
 fi
 
-curl -L -o cardwire.deb "$CARDWIRE_DEB_URL"
+CARDWIRE_VERSION="${CARDWIRE_TAG#v}"
+CARDWIRE_DEB_URL="https://github.com/OpenGamingCollective/cardwire/releases/download/${CARDWIRE_TAG}/cardwire_${CARDWIRE_VERSION}-1_amd64.deb"
+
+log "Última versión detectada: $CARDWIRE_TAG"
+curl -fL -o cardwire.deb "$CARDWIRE_DEB_URL" || die "No se pudo descargar $CARDWIRE_DEB_URL — el nombre del asset puede haber cambiado. Revisa https://github.com/OpenGamingCollective/cardwire/releases/tag/${CARDWIRE_TAG} y descarga el .deb manualmente."
+
 sudo apt install -y ./cardwire.deb
 sudo systemctl enable --now cardwired
 
@@ -176,13 +225,16 @@ sudo systemctl enable --now cardwired
 # 5. Conflicto conocido: power-profiles-daemon
 # ---------------------------------------------------------------------------
 
+PPD_MASKED_BY_SCRIPT="no"
 if systemctl is-active --quiet power-profiles-daemon 2>/dev/null; then
     warn "power-profiles-daemon está activo y puede chocar con asusd (perfiles de energía)."
     if confirm "¿Enmascarar power-profiles-daemon ahora?"; then
         sudo systemctl mask power-profiles-daemon
         sudo systemctl stop power-profiles-daemon || true
+        PPD_MASKED_BY_SCRIPT="si"
     fi
 fi
+state_set PPD_MASKED_BY_SCRIPT "$PPD_MASKED_BY_SCRIPT"
 
 # ---------------------------------------------------------------------------
 # 6. Validación final
@@ -202,4 +254,5 @@ echo
 echo "--- cardwire list (GPUs detectadas) ---"
 cardwire list || warn "cardwire list falló; revisa 'journalctl -u cardwired' para más detalle."
 
-log "Instalación completada. Revisa la salida anterior antes de dar el proyecto por bueno."
+log "Instalación completada. Estado guardado en $STATE_FILE para el revertido."
+echo "Para desinstalar todo limpiamente, usa: ./uninstall-asusctl-cardwire-debian.sh"
