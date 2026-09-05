@@ -86,15 +86,9 @@ cd "$BUILD_DIR"
 # 1. Dependencias de compilación (apt)
 # ---------------------------------------------------------------------------
 #
-# Lista corregida frente al primer borrador del proyecto:
-#   - deduplicados libclang-dev, libxkbcommon-dev, libgtk-3-dev
-#   - corregido "libexpat-dev" (no existe) -> libexpat1-dev
-#   - añadido libdrm-dev (confirmado como dependencia real de asusctl)
-#   - añadidas las dependencias propias de Cardwire (eBPF/Vulkan/Wayland)
-#
-# Estas dependencias NO se desinstalan automáticamente en el revertido:
-# son librerías del sistema que pueden compartirse con otro software, así
-# que quitarlas a ciegas es más arriesgado que dejarlas. El script de
+# Estas dependencias NO se desinstalan automáticamente en el revertido: son
+# librerías del sistema que pueden compartirse con otro software, así que
+# quitarlas a ciegas es más arriesgado que dejarlas. El script de
 # desinstalación deja la lista impresa por si quieres limpiarlas a mano.
 
 log "Instalando dependencias de compilación (asusctl + Cardwire)"
@@ -123,10 +117,6 @@ sudo apt install -y \
 # ---------------------------------------------------------------------------
 # 2. Rust: quitar el de los repos de Debian (si existe) e instalar rustup
 # ---------------------------------------------------------------------------
-#
-# Confirmado en el packaging real de PikaOS para asusctl: usan rustup en vez
-# del rustc/cargo de apt, precisamente para evitar builds rotos por versiones
-# de Rust demasiado antiguas en los repos de Debian/Ubuntu.
 
 log "Preparando Rust (rustup)"
 
@@ -152,12 +142,6 @@ rustup default stable
 # ---------------------------------------------------------------------------
 # 3. Compilar e instalar asusctl (vía checkinstall -> paquete dpkg real)
 # ---------------------------------------------------------------------------
-#
-# En vez de "sudo make install" a pelo (que no queda registrado en dpkg y
-# depende de que el Makefile tenga un target "uninstall" fiable),
-# checkinstall envuelve la instalación, la registra como paquete .deb y la
-# instala vía dpkg. Así "sudo apt purge asusctl" desinstala todo de forma
-# limpia, igual que Cardwire.
 
 log "Clonando y compilando asusctl v$ASUSCTL_VERSION"
 
@@ -168,8 +152,7 @@ cd asusctl
 
 # Fix de permisos udev: las reglas de asusctl usan por defecto el grupo
 # "wheel" (convención de Fedora/Arch). En Debian/Ubuntu el grupo de
-# administración es "sudo", no "wheel". Sin este parche, asusd puede
-# instalarse y arrancar "bien" pero sin permisos reales sobre el hardware.
+# administración es "sudo", no "wheel".
 if [ -f data/99-asusd.rules ] && grep -q 'GROUP="wheel"' data/99-asusd.rules; then
     log "Aplicando parche de grupo udev (wheel -> sudo)"
     sed -i 's/GROUP="wheel"/GROUP="sudo"/g' data/99-asusd.rules
@@ -187,7 +170,23 @@ sudo checkinstall \
     make install
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now asusd
+sudo systemctl enable asusd
+
+# --- PARCHE: no abortar el script si asusd no arranca --------------------
+# systemctl enable --now hacía las dos cosas en un solo comando; si el
+# arranque fallaba (p.ej. sin hardware ASUS ROG real, como en una VM), ese
+# comando devolvía código de error y set -e mataba el script aquí mismo,
+# sin llegar nunca a instalar Cardwire. Separando "enable" de "start" y
+# metiendo el start dentro de un "if", un fallo aquí solo genera un aviso
+# y el script continúa con normalidad.
+if ! sudo systemctl start asusd; then
+    warn "asusd no ha arrancado (el proceso de control ha devuelto un error)."
+    warn "Esto es ESPERABLE si no hay hardware ASUS ROG real (p.ej. en una VM):"
+    warn "asusd necesita las interfaces ACPI/WMI reales del portátil para poder arrancar."
+    warn "El servicio ha quedado 'enabled', así que arrancará solo en el hardware real."
+    warn "Detalle: 'systemctl status asusd' / 'journalctl -xeu asusd.service'."
+    warn "Continuando con la instalación de Cardwire de todas formas."
+fi
 
 cd "$BUILD_DIR"
 
@@ -216,10 +215,21 @@ CARDWIRE_VERSION="${CARDWIRE_TAG#v}"
 CARDWIRE_DEB_URL="https://github.com/OpenGamingCollective/cardwire/releases/download/${CARDWIRE_TAG}/cardwire_${CARDWIRE_VERSION}-1_amd64.deb"
 
 log "Última versión detectada: $CARDWIRE_TAG"
+
 curl -fL -o cardwire.deb "$CARDWIRE_DEB_URL" || die "No se pudo descargar $CARDWIRE_DEB_URL — el nombre del asset puede haber cambiado. Revisa https://github.com/OpenGamingCollective/cardwire/releases/tag/${CARDWIRE_TAG} y descarga el .deb manualmente."
 
 sudo apt install -y ./cardwire.deb
-sudo systemctl enable --now cardwired
+sudo systemctl enable cardwired
+
+# --- PARCHE: mismo tratamiento que asusd, por consistencia y robustez ----
+# En hardware real con GPU híbrida debería arrancar sin problema; esto solo
+# evita que un fallo puntual de arranque bloquee la validación final.
+if ! sudo systemctl start cardwired; then
+    warn "cardwired no ha arrancado (el proceso de control ha devuelto un error)."
+    warn "Puede deberse a falta de una GPU híbrida real que gestionar (p.ej. en una VM)."
+    warn "El servicio ha quedado 'enabled'; arrancará solo en el hardware real."
+    warn "Detalle: 'systemctl status cardwired' / 'journalctl -xeu cardwired.service'."
+fi
 
 # ---------------------------------------------------------------------------
 # 5. Conflicto conocido: power-profiles-daemon
