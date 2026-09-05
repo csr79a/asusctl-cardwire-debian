@@ -22,7 +22,6 @@
 
 set -euo pipefail
 
-ASUSCTL_VERSION="6.3.8"   # ajusta si quieres otra versión/tag concreto
 BUILD_DIR="$HOME/Proyectos/asusctl-cardwire-build"
 STATE_DIR="$HOME/.local/state/asusctl-cardwire-debian"
 STATE_FILE="$STATE_DIR/install.env"
@@ -143,19 +142,48 @@ rustup default stable
 # 3. Compilar e instalar asusctl (vía checkinstall -> paquete dpkg real)
 # ---------------------------------------------------------------------------
 
+log "Averiguando la última versión de asusctl"
+
+# gitlab.com/asus-linux/asusctl (el repo "oficial" histórico) está
+# ARCHIVADO (solo lectura) desde hace tiempo: su última tag se quedó
+# congelada en 6.3.8 y nunca tendrá versiones más nuevas. El desarrollo
+# activo continúa en GitHub, en OpenGamingCollective/asusctl. Igual que con
+# Cardwire, seguimos la redirección pública de /releases/latest (sin pasar
+# por api.github.com) para no depender de un número de versión fijo.
+ASUSCTL_TAG=$(curl -sI https://github.com/OpenGamingCollective/asusctl/releases/latest \
+    | grep -i '^location:' \
+    | sed 's#.*/tag/##' \
+    | tr -d '\r\n')
+
+if [ -z "$ASUSCTL_TAG" ]; then
+    die "No se pudo determinar la última versión de asusctl (falló la redirección de /releases/latest). Revisa https://github.com/OpenGamingCollective/asusctl/releases"
+fi
+ASUSCTL_VERSION="$ASUSCTL_TAG"
+log "Última versión detectada: $ASUSCTL_VERSION"
+
 log "Clonando y compilando asusctl v$ASUSCTL_VERSION"
 
 if [ ! -d "asusctl" ]; then
-    git clone --depth=1 https://gitlab.com/asus-linux/asusctl.git -b "$ASUSCTL_VERSION" asusctl
+    git clone --depth=1 https://github.com/OpenGamingCollective/asusctl.git -b "$ASUSCTL_VERSION" asusctl
 fi
 cd asusctl
 
-# Fix de permisos udev: las reglas de asusctl usan por defecto el grupo
-# "wheel" (convención de Fedora/Arch). En Debian/Ubuntu el grupo de
-# administración es "sudo", no "wheel".
-if [ -f data/99-asusd.rules ] && grep -q 'GROUP="wheel"' data/99-asusd.rules; then
-    log "Aplicando parche de grupo udev (wheel -> sudo)"
-    sed -i 's/GROUP="wheel"/GROUP="sudo"/g' data/99-asusd.rules
+# Fix de permisos udev: las reglas de asusctl usaban por defecto el grupo
+# "wheel" (convención de Fedora/Arch); Debian/Ubuntu usa "sudo". En
+# versiones recientes (fork de GitHub) el archivo se renombró de
+# "99-asusd.rules" a "asusd.rules" y ya no usa GROUP="wheel" en absoluto
+# (se comprueba de todas formas, por si vuelve a cambiar en el futuro).
+ASUSD_RULES_FILE=""
+for candidate in data/99-asusd.rules data/asusd.rules; do
+    if [ -f "$candidate" ]; then
+        ASUSD_RULES_FILE="$candidate"
+        break
+    fi
+done
+
+if [ -n "$ASUSD_RULES_FILE" ] && grep -q 'GROUP="wheel"' "$ASUSD_RULES_FILE"; then
+    log "Aplicando parche de grupo udev (wheel -> sudo) en $ASUSD_RULES_FILE"
+    sed -i 's/GROUP="wheel"/GROUP="sudo"/g' "$ASUSD_RULES_FILE"
 fi
 
 make

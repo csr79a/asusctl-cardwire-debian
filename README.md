@@ -9,10 +9,17 @@ misma función (conmutación/gestión de GPU híbrida).
 
 ## Qué instala
 
-- **asusctl** y **rog-control-center**: compilados desde el repo oficial
-  (`gitlab.com/asus-linux/asusctl`), vía Rust/rustup, empaquetados con
+- **asusctl** y **rog-control-center**: compilados desde el repo activo en
+  GitHub (`OpenGamingCollective/asusctl`), vía Rust/rustup, empaquetados con
   `checkinstall` para que queden registrados en dpkg (y se puedan
-  desinstalar limpiamente).
+  desinstalar limpiamente). Se detecta y compila automáticamente la **última
+  versión publicada**, sin número fijo en el script.
+
+  > Nota: el repo histórico `gitlab.com/asus-linux/asusctl` está **archivado
+  > (solo lectura)** y su última tag se quedó congelada en 6.3.8. El
+  > desarrollo activo continúa en el fork de GitHub, de donde clona este
+  > script.
+
 - **Cardwire**: paquete `.deb` oficial más reciente, descargado
   automáticamente desde las releases de GitHub
   (`OpenGamingCollective/cardwire`) siguiendo la redirección pública de
@@ -34,10 +41,13 @@ chmod +x setup-asusctl-cardwire-debian.sh
 ./setup-asusctl-cardwire-debian.sh
 ```
 
-El script se detiene en el primer error y pide confirmación antes de pasos
-sensibles (como enmascarar `power-profiles-daemon`). Revisa el contenido
-antes de ejecutarlo, especialmente si vas a lanzarlo en un equipo que no sea
-de pruebas. Guarda un registro de lo que cambió en
+El script se detiene en el primer error real y pide confirmación antes de
+pasos sensibles (como enmascarar `power-profiles-daemon`). Si `asusd` o
+`cardwired` no logran arrancar por falta de hardware real (p. ej. en una VM),
+el script **avisa y continúa** en vez de abortar — no es un fallo del
+script, es esperado sin un portátil ASUS ROG real de por medio. Revisa el
+contenido antes de ejecutarlo, especialmente si vas a lanzarlo en un equipo
+que no sea de pruebas. Guarda un registro de lo que cambió en
 `~/.local/state/asusctl-cardwire-debian/install.env`, que usa el script de
 desinstalación para revertir solo lo que él mismo tocó.
 
@@ -60,5 +70,8 @@ y cómo revertir la instalación.
 
 ## Estado
 
-Proyecto en desarrollo/revisión — pendiente de validar en una instalación
-limpia de Debian 13 con KDE Plasma antes de darlo por definitivo.
+Validado en una VM de Debian 13 con KDE Plasma: el flujo completo (asusctl,
+rog-control-center, Cardwire) se instala de principio a fin sin
+intervención manual. `asusd` no puede arrancar sin hardware ASUS ROG real
+(esperado en VM); Cardwire sí arranca y detecta GPUs (incluida la virtual de
+la VM). Pendiente de validar en hardware ASUS ROG real.
