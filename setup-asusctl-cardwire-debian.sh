@@ -218,7 +218,15 @@ log "Última versión detectada: $CARDWIRE_TAG"
 
 curl -fL -o cardwire.deb "$CARDWIRE_DEB_URL" || die "No se pudo descargar $CARDWIRE_DEB_URL — el nombre del asset puede haber cambiado. Revisa https://github.com/OpenGamingCollective/cardwire/releases/tag/${CARDWIRE_TAG} y descarga el .deb manualmente."
 
-sudo apt install -y ./cardwire.deb
+# apt hace la descarga/verificación de paquetes locales como el usuario sin
+# privilegios _apt, que no siempre puede atravesar $HOME (permisos 700 por
+# defecto en Debian). Copiamos a /tmp, que es legible/atravesable por todos,
+# para evitar el aviso "Permiso denegado" de pkgAcquire.
+CARDWIRE_DEB_TMP="/tmp/cardwire-install.deb"
+cp cardwire.deb "$CARDWIRE_DEB_TMP"
+chmod 644 "$CARDWIRE_DEB_TMP"
+sudo apt install -y "$CARDWIRE_DEB_TMP"
+rm -f "$CARDWIRE_DEB_TMP"
 sudo systemctl enable cardwired
 
 # --- PARCHE: mismo tratamiento que asusd, por consistencia y robustez ----
@@ -259,7 +267,11 @@ echo "--- cardwired ---"
 systemctl status cardwired --no-pager || true
 echo
 echo "--- asusctl -s (soporte detectado en el hardware) ---"
-asusctl -s || warn "asusctl -s falló; revisa 'journalctl -u asusd' para más detalle."
+if systemctl is-active --quiet asusd; then
+    asusctl -s || warn "asusctl -s falló pese a que asusd está activo; puede que el flag haya cambiado en esta versión (revisa 'asusctl --help'). Detalle: 'journalctl -u asusd'."
+else
+    warn "asusd no está activo, se omite 'asusctl -s' (no hay daemon con el que hablar; ver el aviso de la sección 3)."
+fi
 echo
 echo "--- cardwire list (GPUs detectadas) ---"
 cardwire list || warn "cardwire list falló; revisa 'journalctl -u cardwired' para más detalle."
