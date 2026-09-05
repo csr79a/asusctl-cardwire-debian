@@ -266,11 +266,14 @@ echo
 echo "--- cardwired ---"
 systemctl status cardwired --no-pager || true
 echo
-echo "--- asusctl -s (soporte detectado en el hardware) ---"
+echo "--- asusctl info (versión y datos del sistema detectados) ---"
 if systemctl is-active --quiet asusd; then
-    asusctl -s || warn "asusctl -s falló pese a que asusd está activo; puede que el flag haya cambiado en esta versión (revisa 'asusctl --help'). Detalle: 'journalctl -u asusd'."
+    # asusctl pasó de flags sueltos (-s, -v...) a subcomandos (info, aura,
+    # profile...) en algún punto de su desarrollo; "-s" ya no existe y da
+    # "Unrecognized argument" pase lo que pase con el hardware.
+    asusctl info || warn "asusctl info falló pese a que asusd está activo; revisa 'asusctl --help' por si la CLI ha cambiado de nuevo. Detalle: 'journalctl -u asusd'."
 else
-    warn "asusd no está activo, se omite 'asusctl -s' (no hay daemon con el que hablar; ver el aviso de la sección 3)."
+    warn "asusd no está activo, se omite 'asusctl info' (no hay daemon con el que hablar; ver el aviso de la sección 3)."
 fi
 echo
 echo "--- cardwire list (GPUs detectadas) ---"
